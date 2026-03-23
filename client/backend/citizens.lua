@@ -6,7 +6,12 @@ RegisterNUICallback('getCitizens', function(data, cb)
         data = {page = 1}
     end
     local page = data.page or 1 -- Default to page 1 if not provided
-    local result = ps.callback(resourceName..':server:getCitizens', page)
+    local ok, result = pcall(ps.callback, resourceName..':server:getCitizens', page)
+    if not ok or type(result) ~= 'table' then
+        ps.warn('[getCitizens] Server callback failed: ' .. tostring(result))
+        cb({})
+        return
+    end
     ps.debug(('[getCitizens] Triggered NUI callback on client for page %d'):format(page), result)
     cb(result)
 end)
@@ -113,6 +118,16 @@ RegisterNUICallback('updateCitizenLicense', function(data, cb)
     else
         cb({ success = false, message = 'Failed to update license' })
     end
+end)
+
+RegisterNUICallback('updateCitizenCustomLicense', function(data, cb)
+    if not MDTOpen then cb({ success = false, message = 'MDT is not open' }) return end
+    if not data or not data.citizenid or not data.licenseId then
+        cb({ success = false, message = 'Missing citizen id or license id' })
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:updateCitizenCustomLicense', data)
+    cb(result or { success = false, message = 'Failed to update custom license' })
 end)
 
 RegisterNUICallback('updateCitizen', function(data, cb)

@@ -76,13 +76,14 @@ end)
 
 -- SETTINGS: Report Templates -------------------------------------------
 
-RegisterNUICallback('getReportTemplates', function(_, cb)
+RegisterNUICallback('getReportTemplates', function(data, cb)
     if not MDTOpen then
         cb({})
         return
     end
 
-    local result = ps.callback(resourceName .. ':server:getReportTemplates')
+    local jobType = (type(data) == 'table' and data.jobType) or nil
+    local result = ps.callback(resourceName .. ':server:getReportTemplates', { jobType = jobType })
     cb(result or {})
 end)
 
@@ -108,12 +109,13 @@ end)
 
 -- TAG MANAGEMENT -------------------------------------------
 
-RegisterNUICallback('getTags', function(_, cb)
+RegisterNUICallback('getTags', function(data, cb)
     if not MDTOpen then
         cb({})
         return
     end
-    local result = ps.callback(resourceName .. ':server:getTags')
+    local jobType = (type(data) == 'table' and data.jobType) or nil
+    local result = ps.callback(resourceName .. ':server:getTags', { jobType = jobType })
     cb(result or {})
 end)
 
@@ -142,4 +144,93 @@ RegisterNUICallback('deleteTag', function(data, cb)
     end
     local result = ps.callback(resourceName .. ':server:deleteTag', data or {})
     cb(result or { success = false, message = 'Failed to delete tag' })
+end)
+
+-- SETTINGS: Awards -------------------------------------------
+
+RegisterNUICallback('getAwardConfigs', function(_, cb)
+    if not MDTOpen then
+        cb({})
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:getAwardConfigs')
+    cb(result or {})
+end)
+
+RegisterNUICallback('saveAward', function(data, cb)
+    if not MDTOpen then
+        cb({ success = false, message = 'MDT is not open' })
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:saveAward', data or {})
+    cb(result or { success = false, message = 'Failed to save award' })
+end)
+
+RegisterNUICallback('deleteAward', function(data, cb)
+    if not MDTOpen then
+        cb({ success = false, message = 'MDT is not open' })
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:deleteAward', data or {})
+    cb(result or { success = false, message = 'Failed to delete award' })
+end)
+
+-- AWARDS PAGE: Get awards data (stats + progress + leaderboard) ---
+
+RegisterNUICallback('getAwardsData', function(data, cb)
+    if not MDTOpen then
+        cb(nil)
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:getAwardsData', data or {})
+    cb(result)
+end)
+
+-- SETTINGS: Custom Licenses -------------------------------------------
+
+RegisterNUICallback('getCustomLicenses', function(_, cb)
+    if not MDTOpen then
+        cb({})
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:getCustomLicenses')
+    cb(result or {})
+end)
+
+RegisterNUICallback('saveCustomLicense', function(data, cb)
+    if not MDTOpen then
+        cb({ success = false, message = 'MDT is not open' })
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:saveCustomLicense', data or {})
+    cb(result or { success = false, message = 'Failed to save license' })
+end)
+
+RegisterNUICallback('deleteCustomLicense', function(data, cb)
+    if not MDTOpen then
+        cb({ success = false, message = 'MDT is not open' })
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:deleteCustomLicense', data or {})
+    cb(result or { success = false, message = 'Failed to delete license' })
+end)
+
+-- SETTINGS: Colors -------------------------------------------
+
+RegisterNUICallback('getColorConfig', function(_, cb)
+    if not MDTOpen then
+        cb(nil)
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:getColorConfig')
+    cb(result)
+end)
+
+RegisterNUICallback('saveColorConfig', function(data, cb)
+    if not MDTOpen then
+        cb({ success = false, message = 'MDT is not open' })
+        return
+    end
+    local result = ps.callback(resourceName .. ':server:saveColorConfig', data or {})
+    cb(result or { success = false, message = 'Failed to save colors' })
 end)

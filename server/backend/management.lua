@@ -68,10 +68,10 @@ local function getAllPermissions()
         'charges_view', 'charges_edit',
         'dispatch_attach', 'dispatch_route',
         'cameras_view', 'bodycams_view',
-        'notes_edit_department',
-        'roster_manage_certifications',
+        'roster_manage_certifications', 'roster_manage_officers',
         'management_permissions', 'management_bulletins', 'management_activity',
-        'management_tags', 'management_tracking',
+        'management_tags', 'management_tracking', 'management_settings',
+        'ia_view', 'ia_manage',
     }
 end
 
@@ -324,17 +324,36 @@ CreateThread(function()
     end
 end)
 
-ps.registerCallback(resourceName .. ':server:getTags', function(source)
+ps.registerCallback(resourceName .. ':server:getTags', function(source, data)
     local src = source
     if not CheckAuth(src) then return {} end
 
-    local rows = MySQL.query.await([[
-        SELECT t.id, t.name, t.type, t.color, t.created_at,
-               (SELECT COUNT(*) FROM mdt_profiles_tags pt WHERE pt.tag = t.name) +
-               (SELECT COUNT(*) FROM mdt_reports_tags rt WHERE rt.tag = t.name) AS usage_count
-        FROM mdt_tags t
-        ORDER BY t.name ASC
-    ]])
+    data = data or {}
+    local jobType = data.jobType
+
+    local query, params
+    if jobType and (jobType == 'leo' or jobType == 'ems') then
+        query = [[
+            SELECT t.id, t.name, t.type, t.color, t.job_type, t.created_at,
+                   (SELECT COUNT(*) FROM mdt_profiles_tags pt WHERE pt.tag = t.name) +
+                   (SELECT COUNT(*) FROM mdt_reports_tags rt WHERE rt.tag = t.name) AS usage_count
+            FROM mdt_tags t
+            WHERE t.job_type = ? OR t.job_type = 'all'
+            ORDER BY t.name ASC
+        ]]
+        params = { jobType }
+    else
+        query = [[
+            SELECT t.id, t.name, t.type, t.color, t.job_type, t.created_at,
+                   (SELECT COUNT(*) FROM mdt_profiles_tags pt WHERE pt.tag = t.name) +
+                   (SELECT COUNT(*) FROM mdt_reports_tags rt WHERE rt.tag = t.name) AS usage_count
+            FROM mdt_tags t
+            ORDER BY t.name ASC
+        ]]
+        params = {}
+    end
+
+    local rows = MySQL.query.await(query, params)
     return rows or {}
 end)
 
@@ -344,8 +363,9 @@ ps.registerCallback(resourceName .. ':server:createTag', function(source, payloa
 
     payload = payload or {}
     local name = payload.name
-    local tagType = payload.type or 'citizen'
+    local tagType = payload.type or 'officer'
     local color = payload.color or '#6b7280'
+    local jobType = payload.job_type or 'all'
 
     if not name or name == '' then
         return { success = false, message = 'Tag name is required' }
@@ -360,7 +380,7 @@ ps.registerCallback(resourceName .. ':server:createTag', function(source, payloa
         return { success = false, message = 'Tag already exists' }
     end
 
-    local id = MySQL.insert.await('INSERT INTO mdt_tags (name, type, color) VALUES (?, ?, ?)', { name, tagType, color })
+    local id = MySQL.insert.await('INSERT INTO mdt_tags (name, type, color, job_type) VALUES (?, ?, ?, ?)', { name, tagType, color, jobType })
     if not id then
         return { success = false, message = 'Failed to create tag' }
     end
@@ -377,6 +397,7 @@ ps.registerCallback(resourceName .. ':server:updateTag', function(source, payloa
     local name = payload.name
     local tagType = payload.type
     local color = payload.color
+    local jobType = payload.job_type or 'all'
 
     if not id then
         return { success = false, message = 'Invalid tag ID' }
@@ -398,7 +419,7 @@ ps.registerCallback(resourceName .. ':server:updateTag', function(source, payloa
         return { success = false, message = 'Another tag with that name already exists' }
     end
 
-    MySQL.update.await('UPDATE mdt_tags SET name = ?, type = ?, color = ? WHERE id = ?', { name, tagType, color, id })
+    MySQL.update.await('UPDATE mdt_tags SET name = ?, type = ?, color = ?, job_type = ? WHERE id = ?', { name, tagType, color, jobType, id })
 
     -- Update references in profile tags and report tags if name changed
     if oldName and oldName ~= name then
@@ -406,6 +427,343 @@ ps.registerCallback(resourceName .. ':server:updateTag', function(source, payloa
         pcall(MySQL.update.await, 'UPDATE mdt_reports_tags SET tag = ? WHERE tag = ?', { name, oldName })
     end
 
+    return { success = true }
+end)
+
+-- AWARDS MANAGEMENT -------------------------------------------
+
+ps.registerCallback(resourceName .. ':server:getAwardConfigs', function(source)
+    local src = source
+    if not CheckAuth(src) then return {} end
+
+    local rows = MySQL.query.await([[
+        SELECT id, name, description, icon, category, goal_type, goal_amount
+        FROM mdt_awards
+        ORDER BY id ASC
+    ]])
+
+    local result = {}
+    for _, row in ipairs(rows or {}) do
+        result[#result + 1] = {
+            id = row.id,
+            name = row.name,
+            description = row.description or '',
+            icon = row.icon or 'emoji_events',
+            category = row.category or 'general',
+            goalType = row.goal_type,
+            goalAmount = tonumber(row.goal_amount) or 1,
+        }
+    end
+    return result
+end)
+
+ps.registerCallback(resourceName .. ':server:saveAward', function(source, payload)
+    local src = source
+    if not CheckAuth(src) then return { success = false, message = 'Unauthorized' } end
+
+    payload = payload or {}
+    local name = payload.name
+    local description = payload.description or ''
+    local icon = payload.icon or 'emoji_events'
+    local category = payload.category or 'general'
+    local goalType = payload.goalType
+    local goalAmount = tonumber(payload.goalAmount) or 1
+
+    if not name or name == '' then
+        return { success = false, message = 'Award name is required' }
+    end
+    if not goalType or goalType == '' then
+        return { success = false, message = 'Goal type is required' }
+    end
+
+    local id = payload.id and tonumber(payload.id)
+
+    if id then
+        -- Update existing
+        MySQL.update.await([[
+            UPDATE mdt_awards
+            SET name = ?, description = ?, icon = ?, category = ?, goal_type = ?, goal_amount = ?
+            WHERE id = ?
+        ]], { name, description, icon, category, goalType, goalAmount, id })
+    else
+        -- Create new
+        id = MySQL.insert.await([[
+            INSERT INTO mdt_awards (name, description, icon, category, goal_type, goal_amount)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ]], { name, description, icon, category, goalType, goalAmount })
+    end
+
+    if not id then
+        return { success = false, message = 'Failed to save award' }
+    end
+
+    return { success = true, id = id }
+end)
+
+ps.registerCallback(resourceName .. ':server:deleteAward', function(source, payload)
+    local src = source
+    if not CheckAuth(src) then return { success = false, message = 'Unauthorized' } end
+
+    payload = payload or {}
+    local id = tonumber(payload.id)
+    if not id then
+        return { success = false, message = 'Invalid award ID' }
+    end
+
+    MySQL.query.await('DELETE FROM mdt_awards WHERE id = ?', { id })
+    return { success = true }
+end)
+
+ps.registerCallback(resourceName .. ':server:getAwardsData', function(source, payload)
+    local src = source
+    if not CheckAuth(src) then return nil end
+
+    local citizenid = ps.getIdentifier(src)
+    if not citizenid then return nil end
+
+    -- Get officer info
+    local playerName = ps.getName(src) or 'Unknown'
+    local jobData = ps.getJobData(src)
+    local callsign = ''
+    local rank = ''
+    if jobData then
+        callsign = jobData.callsign or ''
+        if type(jobData.grade) == 'table' then
+            rank = jobData.grade.name or jobData.grade.label or ''
+        end
+    end
+
+    -- Get officer's stats from reports
+    local reportCount = tonumber(MySQL.scalar.await(
+        'SELECT COUNT(*) FROM mdt_reports WHERE author = ?', { citizenid }
+    )) or 0
+
+    local arrestCount = tonumber(MySQL.scalar.await(
+        'SELECT COUNT(*) FROM mdt_reports WHERE author = ? AND type = ?', { citizenid, 'Arrest Report' }
+    )) or 0
+
+    local caseCount = tonumber(MySQL.scalar.await(
+        'SELECT COUNT(DISTINCT co.case_id) FROM mdt_case_officers co WHERE co.citizenid = ?', { citizenid }
+    )) or 0
+
+    local evidenceCount = tonumber(MySQL.scalar.await(
+        'SELECT COUNT(*) FROM mdt_evidence_items WHERE created_by = ?', { citizenid }
+    )) or 0
+
+    -- BOLOs linked via reports the officer authored
+    local boloCount = tonumber(MySQL.scalar.await(
+        'SELECT COUNT(*) FROM mdt_bolos b INNER JOIN mdt_reports r ON r.id = b.reportId WHERE r.author = ?', { citizenid }
+    )) or 0
+
+    -- Warrants linked via reports the officer authored
+    local warrantCount = tonumber(MySQL.scalar.await(
+        'SELECT COUNT(*) FROM mdt_reports_warrants w INNER JOIN mdt_reports r ON r.id = w.reportid WHERE r.author = ?', { citizenid }
+    )) or 0
+
+    local totalFined = tonumber(MySQL.scalar.await(
+        'SELECT COALESCE(SUM(rc.fine), 0) FROM mdt_reports_charges rc INNER JOIN mdt_reports r ON r.id = rc.reportid WHERE r.author = ?', { citizenid }
+    )) or 0
+
+    local totalMonths = tonumber(MySQL.scalar.await(
+        'SELECT COALESCE(SUM(rc.time), 0) FROM mdt_reports_charges rc INNER JOIN mdt_reports r ON r.id = rc.reportid WHERE r.author = ?', { citizenid }
+    )) or 0
+
+    local citations = tonumber(MySQL.scalar.await(
+        'SELECT COUNT(*) FROM mdt_reports WHERE author = ? AND type = ?', { citizenid, 'Citation' }
+    )) or 0
+
+    local myStats = {
+        name = playerName,
+        callsign = callsign,
+        rank = rank,
+        reports = reportCount,
+        arrests = arrestCount,
+        cases = caseCount,
+        evidence = evidenceCount,
+        bolos = boloCount,
+        warrants = warrantCount,
+        totalFined = totalFined,
+        totalMonths = totalMonths,
+        citations = citations,
+    }
+
+    -- Map stat names to goal types
+    local statMap = {
+        reports = reportCount,
+        arrests = arrestCount,
+        cases = caseCount,
+        evidence = evidenceCount,
+        bolos = boloCount,
+        warrants = warrantCount,
+        totalFined = totalFined,
+        totalMonths = totalMonths,
+        citations = citations,
+    }
+
+    -- Get award configs and compute progress
+    local awardRows = MySQL.query.await([[
+        SELECT id, name, description, icon, category, goal_type, goal_amount
+        FROM mdt_awards ORDER BY id ASC
+    ]])
+
+    local awards = {}
+    for _, row in ipairs(awardRows or {}) do
+        local progress = statMap[row.goal_type] or 0
+        local goalAmount = tonumber(row.goal_amount) or 1
+        local earned = progress >= goalAmount
+
+        awards[#awards + 1] = {
+            id = row.id,
+            name = row.name,
+            description = row.description or '',
+            icon = row.icon or 'emoji_events',
+            category = row.category or 'general',
+            goalType = row.goal_type,
+            goalAmount = goalAmount,
+            progress = progress,
+            earned = earned,
+            earnedDate = earned and os.date('%Y-%m-%d') or nil,
+        }
+    end
+
+    -- Build leaderboard from all officers who have filed reports
+    local leaderboardRows = MySQL.query.await([[
+        SELECT
+            r.author,
+            r.authorplaintext,
+            COUNT(*) as total_reports,
+            SUM(CASE WHEN r.type = 'Arrest Report' THEN 1 ELSE 0 END) as total_arrests,
+            SUM(CASE WHEN r.type = 'Citation' THEN 1 ELSE 0 END) as total_citations
+        FROM mdt_reports r
+        WHERE r.author IS NOT NULL AND r.author != ''
+        GROUP BY r.author, r.authorplaintext
+        ORDER BY total_reports DESC
+        LIMIT 25
+    ]])
+
+    local leaderboard = {}
+    for i, row in ipairs(leaderboardRows or {}) do
+        local cid = row.author
+        local reports = tonumber(row.total_reports) or 0
+        local arrests = tonumber(row.total_arrests) or 0
+
+        -- Get additional stats per officer
+        local oCases = tonumber(MySQL.scalar.await(
+            'SELECT COUNT(DISTINCT case_id) FROM mdt_case_officers WHERE citizenid = ?', { cid }
+        )) or 0
+
+        local oWarrants = tonumber(MySQL.scalar.await(
+            'SELECT COUNT(*) FROM mdt_reports_warrants w INNER JOIN mdt_reports r ON r.id = w.reportid WHERE r.author = ?', { cid }
+        )) or 0
+
+        local oFined = tonumber(MySQL.scalar.await(
+            'SELECT COALESCE(SUM(rc.fine), 0) FROM mdt_reports_charges rc INNER JOIN mdt_reports r ON r.id = rc.reportid WHERE r.author = ?', { cid }
+        )) or 0
+
+        local oMonths = tonumber(MySQL.scalar.await(
+            'SELECT COALESCE(SUM(rc.time), 0) FROM mdt_reports_charges rc INNER JOIN mdt_reports r ON r.id = rc.reportid WHERE r.author = ?', { cid }
+        )) or 0
+
+        local score = reports + (arrests * 2) + (oCases * 3) + (oWarrants * 5) + math.floor(oFined / 1000) + oMonths
+
+        leaderboard[#leaderboard + 1] = {
+            rank = i,
+            name = row.authorplaintext or 'Unknown',
+            callsign = '',
+            department = '',
+            reports = reports,
+            arrests = arrests,
+            cases = oCases,
+            warrants = oWarrants,
+            totalFined = oFined,
+            totalMonths = oMonths,
+            score = score,
+            isCurrentUser = (cid == citizenid),
+        }
+    end
+
+    -- Sort leaderboard by score descending and re-rank
+    table.sort(leaderboard, function(a, b) return a.score > b.score end)
+    for i, entry in ipairs(leaderboard) do
+        entry.rank = i
+    end
+
+    return {
+        stats = myStats,
+        awards = awards,
+        leaderboard = leaderboard,
+    }
+end)
+
+-- CUSTOM LICENSES MANAGEMENT -------------------------------------------
+
+ps.registerCallback(resourceName .. ':server:getCustomLicenses', function(source)
+    local src = source
+    if not CheckAuth(src) then return {} end
+
+    local rows = MySQL.query.await([[
+        SELECT id, name, description FROM mdt_custom_licenses ORDER BY id ASC
+    ]])
+
+    local result = {}
+    for _, row in ipairs(rows or {}) do
+        result[#result + 1] = {
+            id = row.id,
+            name = row.name,
+            description = row.description or '',
+        }
+    end
+    return result
+end)
+
+ps.registerCallback(resourceName .. ':server:saveCustomLicense', function(source, payload)
+    local src = source
+    if not CheckAuth(src) then return { success = false, message = 'Unauthorized' } end
+
+    payload = payload or {}
+    local name = payload.name
+    local description = payload.description or ''
+
+    if not name or name == '' then
+        return { success = false, message = 'License name is required' }
+    end
+
+    local id = payload.id and tonumber(payload.id)
+
+    if id then
+        -- Check duplicate (excluding self)
+        local dup = MySQL.scalar.await('SELECT id FROM mdt_custom_licenses WHERE name = ? AND id != ?', { name, id })
+        if dup then
+            return { success = false, message = 'A license with that name already exists' }
+        end
+        MySQL.update.await('UPDATE mdt_custom_licenses SET name = ?, description = ? WHERE id = ?', { name, description, id })
+    else
+        -- Check duplicate
+        local existing = MySQL.scalar.await('SELECT id FROM mdt_custom_licenses WHERE name = ?', { name })
+        if existing then
+            return { success = false, message = 'A license with that name already exists' }
+        end
+        id = MySQL.insert.await('INSERT INTO mdt_custom_licenses (name, description) VALUES (?, ?)', { name, description })
+    end
+
+    if not id then
+        return { success = false, message = 'Failed to save license' }
+    end
+
+    return { success = true, id = id }
+end)
+
+ps.registerCallback(resourceName .. ':server:deleteCustomLicense', function(source, payload)
+    local src = source
+    if not CheckAuth(src) then return { success = false, message = 'Unauthorized' } end
+
+    payload = payload or {}
+    local id = tonumber(payload.id)
+    if not id then
+        return { success = false, message = 'Invalid license ID' }
+    end
+
+    MySQL.query.await('DELETE FROM mdt_custom_licenses WHERE id = ?', { id })
     return { success = true }
 end)
 
