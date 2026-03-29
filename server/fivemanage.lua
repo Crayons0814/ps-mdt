@@ -171,11 +171,9 @@ ps.registerCallback(resourceName .. ':server:uploadSuspectPhoto', function(sourc
     return { success = true, message = 'Photo uploaded', imageUrl = imageUrl }
 end)
 
--- ============================================================
 -- FiveManage Activity Logging (batched)
 -- Forwards MDT audit log entries to FiveManage Logs API
 -- Docs: https://docs.fivemanage.com/fivemanage/guides/logs/best-practices
--- ============================================================
 
 local LOG_BATCH_SIZE = 50         -- Send when batch reaches this size
 local LOG_BATCH_INTERVAL = 5000   -- Or every 5 seconds (ms), whichever comes first
